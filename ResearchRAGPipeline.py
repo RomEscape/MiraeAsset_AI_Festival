@@ -142,27 +142,54 @@ class ResearchRAGPipeline:
         data_json = []
         merged_text = ""
 
-        # PDF 파일들을 중요도 순으로 정렬
+        # PDF 파일들을 날짜 기준(최신순)으로 정렬
         pdf_files = []
+        date_check_list = []  # 날짜 파싱 결과 확인용
+        import re
+        def extract_date_from_text(text):
+            # 다양한 날짜 포맷 지원 (YYYYMMDD, YYYY-MM-DD, YYYY.MM.DD 등)
+            patterns = [
+                r'(20\\d{2})[.\\-년 ]?(\\d{1,2})[.\\-월 ]?(\\d{1,2})',  # 20250709, 2025-07-09, 2025.07.09, 2025년 7월 9일
+            ]
+            for pat in patterns:
+                m = re.search(pat, text)
+                if m:
+                    y, mth, d = m.group(1), m.group(2).zfill(2), m.group(3).zfill(2)
+                    return f'{y}{mth}{d}'
+            return None
+
         for file in path.glob("*.pdf"):
             if file.name in self.processed_files:
                 continue  # 이미 처리된 파일 스킵
-                
-            # 파일 크기로 초기 중요도 추정
-            file_size = file.stat().st_size
-            pdf_files.append((file, file_size))
-        
-        # 파일 크기 순으로 정렬 (큰 파일이 더 중요할 가능성)
-        pdf_files.sort(key=lambda x: x[1], reverse=True)
-
-        for file, file_size in pdf_files:
-            print(f"PDF 처리 중: {file.name} ({file_size:,} bytes)")
+            # PDF 본문에서 날짜 추출
+            import fitz
             text = ""
             doc = fitz.open(str(file))
             for page in doc:
                 text += re.sub(r'\s+', ' ', page.get_text()).strip() + "\n"
             doc.close()
+            date_str = extract_date_from_text(text)
+            date_source = "본문"
+            # 본문에서 추출 실패 시 파일명에서 추출
+            if not date_str:
+                m = re.search(r'_(\d{8})_', file.name)
+                if m:
+                    date_str = m.group(1)
+                    date_source = "파일명"
+                else:
+                    date_str = "00000000"
+                    date_source = "없음"
+            pdf_files.append((file, date_str, text))
+            date_check_list.append((file.name, date_str, date_source))
+        # 날짜(YYYYMMDD) 기준 내림차순(최신순) 정렬
+        pdf_files.sort(key=lambda x: x[1], reverse=True)
+        # 날짜 파싱 결과 전체 출력
+        print("[PDF 파일별 날짜 파싱 결과]")
+        for fname, dstr, src in date_check_list:
+            print(f"- {fname} → {dstr} (근거: {src})")
 
+        for file, date_str, text in pdf_files:
+            print(f"PDF 처리 중: {file.name} (날짜: {date_str})")
             metadata = self._extract_metadata_from_text(text)
             document = Document(
                 page_content=text.strip(),
@@ -179,7 +206,6 @@ class ResearchRAGPipeline:
 
             # 텍스트 파일 누적
             merged_text += f"\n\n[파일명: {file.name}]\n{text.strip()}"
-            
             # 처리된 파일 기록
             self.processed_files.add(file.name)
 
