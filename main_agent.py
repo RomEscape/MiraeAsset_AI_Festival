@@ -7,6 +7,8 @@ import re
 import sys
 from agent_memory import AgentMemory, run_memory_tool
 import final_analysis
+import os
+import shutil
 
 load_dotenv(override=True)
 
@@ -173,6 +175,11 @@ prompt_template = ChatPromptTemplate.from_template(
 특히 Thought 단계에서는 아래 Observation 요약을 반드시 참고해서, 지금까지 어떤 도구를 사용했고 어떤 정보를 얻었는지 구체적으로 언급하세요.
 예시: '지금까지 NaverDiscussionRAGPipeline에서 "여론 점수: 60/100, 설명: ..."을 받았고, 다음으로 전문가 의견을 분석하겠습니다.'
 
+※ MemoryTool 사용 시 반드시 아래 지침을 따르세요:
+- Action Input에는 반드시 'best', 'patterns', 'recall:질문' 등 명확한 액션을 지정하세요.
+- 예시: Action Input: best / Action Input: patterns / Action Input: recall:삼성전자
+- 과거 분석 결과 중 가장 효율적이었던(성과가 좋았던) 도구 조합/분석 패턴만 참고하세요. 단순히 모든 과거 분석 결과를 나열하지 마세요.
+
 사용자 질문: {input}
 
 사용 가능한 도구: {tool_desc}
@@ -308,12 +315,29 @@ def react_loop(user_question: str):
         # LLM 출력에서 Observation: ... 블록이 있으면 경고 출력 및 무시
         if re.search(r"^Observation\s*:", llm_output, re.MULTILINE):
             print("[경고] LLM 출력에 Observation이 포함되어 있어 무시합니다. 반드시 도구 실행 결과만 Observation으로 기록합니다.")
-        # 도구 실행 결과만 Observation에 기록
-        print(f"[DEBUG] observation 반환값:\n{observation}")  # 점수+설명 모두 포함되는지 확인
-        if isinstance(observation, str) and '\n' in observation:
-            history += f"\nObservation: {observation.strip()}\n"
+        # Observation에 도구 프롬프트 예시/지침이 섞여 들어오는지 감지 및 필터링
+        def filter_prompt_leakage(obs):
+            # 프롬프트/예시/지침 관련 키워드
+            prompt_keywords = [
+                '답변 형식', '예시', '아래 형식', '반드시', '지침', '예를 들어', '아래 예시',
+                'Answer:', 'Question:', 'Context:', '아래 지침', '아래 규칙', '아래 예시를 참고',
+                '아래 내용을 참고', '아래 내용을 기반', '아래 정보를 참고', '아래 정보를 기반'
+            ]
+            lines = obs.split('\n') if isinstance(obs, str) else [obs]
+            filtered = []
+            for line in lines:
+                if not any(kw in line for kw in prompt_keywords):
+                    filtered.append(line)
+            if len(filtered) < len(lines):
+                print("[경고] Observation에 프롬프트/예시/지침 관련 문구가 감지되어 자동 필터링되었습니다.")
+            return '\n'.join(filtered).strip()
+        # 도구 실행 결과만 Observation에 기록 (프롬프트/예시/지침 자동 필터링)
+        filtered_observation = filter_prompt_leakage(observation)
+        print(f"[DEBUG] observation 반환값(필터링 후):\n{filtered_observation}")
+        if isinstance(filtered_observation, str) and '\n' in filtered_observation:
+            history += f"\nObservation: {filtered_observation}\n"
         else:
-            history += f"\nObservation: {observation}\n"
+            history += f"\nObservation: {filtered_observation}\n"
         if tool_name != "MemoryTool":
             action_observation_log.append((tool_name, observation))
             used_tools.add(tool_name)
@@ -377,8 +401,31 @@ def react_loop(user_question: str):
             history = '\n'.join(lines[:keep_start] + lines[keep_start:])
 
 
+def clean_data_dir():
+    data_dir = "./data"
+    if not os.path.exists(data_dir):
+        os.makedirs(data_dir, exist_ok=True)
+        print(f"[초기화] {data_dir} 폴더 생성 완료")
+    else:
+        for f in os.listdir(data_dir):
+            file_path = os.path.join(data_dir, f)
+            if os.path.isfile(file_path) and f != "memory.json":
+                try:
+                    os.remove(file_path)
+                    print(f"[초기화] {file_path} 삭제 완료")
+                except Exception as e:
+                    print(f"[초기화 오류] {file_path} 삭제 실패: {e}")
+    chroma_db_path = "./chroma_langchain_db"
+    if os.path.exists(chroma_db_path):
+        try:
+            shutil.rmtree(chroma_db_path)
+            print(f"[초기화] {chroma_db_path} 폴더 삭제 완료")
+        except Exception as e:
+            print(f"[초기화 오류] {chroma_db_path} 삭제 실패: {e}")
+
 
 if __name__ == "__main__":
+    clean_data_dir()
     # 한 번에 한 질문만 입력받아 실행
     user_question = input("분석할 질문을 입력하세요: ")
     print(f"\n{'='*50}")
