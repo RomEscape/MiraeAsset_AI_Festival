@@ -8,9 +8,12 @@ from langchain_community.embeddings import ClovaXEmbeddings
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 import numpy as np
+from dotenv import load_dotenv
+import re # 텍스트 파싱을 위한 모듈 추가
 
 class StockPriceRAGPipeline:
     def __init__(self, db_path, collection_name):
+        load_dotenv(override=True)  # 환경변수 로딩 추가
         self.db_path = db_path
         self.collection_name = collection_name
         self.embeddings = ClovaXEmbeddings()
@@ -26,25 +29,37 @@ class StockPriceRAGPipeline:
             'endTime': end_time,
             'timeframe': time_from
         }
-        
         try:
             response = requests.get(url, params=params)
             response.raise_for_status()
-            
-            # 응답 데이터 파싱
             data_text = response.text.strip()
-            if data_text.startswith('[') and data_text.endswith(']'):
-                # JSON 배열 형태로 반환되는 경우
+            # 응답 원문 출력 (디버깅)
+            print("[네이버 API 응답 원문]", data_text[:300] + ("..." if len(data_text) > 300 else ""))
+            # JSON 배열 형태로 반환되는 경우
+            try:
                 data = json.loads(data_text)
+                # 네이버 API는 첫 2개(헤더/빈값) 이후가 실제 데이터인 경우가 많음
+                if isinstance(data, list) and len(data) > 2 and isinstance(data[2], list):
+                    keys = data[0]
+                    result = []
+                    for row in data[2:]:
+                        if len(row) == len(keys):
+                            result.append({k: v for k, v in zip(keys, row)})
+                    return result
                 return data
-            else:
-                # 텍스트 형태로 반환되는 경우 파싱
+            except Exception as e:
+                print(f"[경고] JSON 파싱 실패, 텍스트 파싱 시도: {e}")
+                # 텍스트 파싱 (탭/쉼표/공백 등)
                 lines = data_text.split('\n')
                 data = []
                 for line in lines:
-                    if line.strip() and not line.startswith('['):
-                        parts = line.strip().split('\t')
-                        if len(parts) >= 6:
+                    line = line.strip().strip(',[]')
+                    if not line or line.startswith('[') or line.startswith(']'):
+                        continue
+                    # 구분자: 탭, 쉼표, 공백
+                    parts = [p for p in re.split(r'[\t, ]+', line) if p]
+                    if len(parts) >= 6:
+                        try:
                             data.append({
                                 '날짜': parts[0],
                                 '시가': float(parts[1].replace(',', '')),
@@ -53,6 +68,10 @@ class StockPriceRAGPipeline:
                                 '종가': float(parts[4].replace(',', '')),
                                 '거래량': int(parts[5].replace(',', ''))
                             })
+                        except:
+                            continue
+                if not data:
+                    print("[경고] 텍스트 파싱 결과 데이터 없음.")
                 return data
         except Exception as e:
             print(f"주가 데이터 조회 오류: {e}")
@@ -184,16 +203,12 @@ class StockPriceRAGPipeline:
             if not data_files:
                 print("저장된 주가 데이터 파일이 없습니다.")
                 return
-            
             latest_file = max(data_files, key=lambda x: os.path.getctime(os.path.join("./data", x)))
             file_path = os.path.join("./data", latest_file)
-            
             with open(file_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-            
             # 데이터를 세그먼트로 분할
             documents = []
-            
             # 실시간 데이터
             if '실시간' in data:
                 realtime = data['실시간']
@@ -202,16 +217,13 @@ class StockPriceRAGPipeline:
                     metadata={"type": "실시간", "source": latest_file}
                 )
                 documents.append(doc)
-            
             # 기간별 데이터
             for period in ['1주일', '1개월', '3개월']:
                 if period in data:
                     period_data = data[period]
                     if isinstance(period_data, list) and len(period_data) > 0:
-                        # 요약 통계 계산
                         prices = [float(item['종가']) for item in period_data if '종가' in item]
                         volumes = [int(item['거래량']) for item in period_data if '거래량' in item]
-                        
                         if prices:
                             summary = {
                                 '기간': period,
@@ -222,13 +234,11 @@ class StockPriceRAGPipeline:
                                 '변동성': (max(prices) - min(prices)) / min(prices) * 100,
                                 '평균거래량': sum(volumes) / len(volumes) if volumes else 0
                             }
-                            
                             doc = Document(
                                 page_content=json.dumps(summary, ensure_ascii=False),
                                 metadata={"type": period, "source": latest_file}
                             )
                             documents.append(doc)
-            
             # 기술적 지표
             if '기술적지표' in data:
                 tech_data = data['기술적지표']
@@ -237,22 +247,24 @@ class StockPriceRAGPipeline:
                     metadata={"type": "기술적지표", "source": latest_file}
                 )
                 documents.append(doc)
-            
+            if not documents:
+                print("임베딩할 데이터가 없습니다. (주가 데이터 파싱 실패 또는 데이터 없음)")
+                return
             # ChromaDB에 저장
             collection = self.client.get_or_create_collection(self.collection_name)
-            
             texts = [doc.page_content for doc in documents]
             metadatas = [doc.metadata for doc in documents]
             ids = [f"stock_{i}" for i in range(len(documents))]
-            
             collection.add(
                 documents=texts,
                 metadatas=metadatas,
                 ids=ids
             )
-            
             print(f"ChromaDB에 {len(documents)}건 저장 완료.")
-            
+            # 저장된 결과 출력
+            print("\n[저장된 임베딩 데이터 요약]")
+            for doc in documents:
+                print(doc.page_content[:300] + ("..." if len(doc.page_content) > 300 else ""))
         except Exception as e:
             print(f"임베딩 및 저장 오류: {e}")
 
