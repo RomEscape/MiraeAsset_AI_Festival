@@ -9,7 +9,7 @@
 
 
 ## 주요 기능 및 구조
-### 1. 종토방 여론 분석 (NaverDiscussionRAGPipeline.py)
+### 1. 종목 토론방 여론 분석 (NaverDiscussionRAGPipeline.py)
 * 네이버 종목 토론방(종토방)에서 실시간 댓글/여론을 크롤링
 * 정치적/비속어 필터링, 종목 관련성 검증
 * 세그멘테이션 및 임베딩 후 ChromaDB에 저장
