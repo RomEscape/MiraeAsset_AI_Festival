@@ -22,6 +22,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
 from selenium.common.exceptions import NoSuchElementException, ElementNotInteractableException
 from webdriver_manager.chrome import ChromeDriverManager
+import shutil
 
 # 정치적 키워드 상수 정의
 POLITICAL_KEYWORDS = [
@@ -367,20 +368,15 @@ def main():
         db_path="./chroma_langchain_db",
         collection_name="clovastudiodatas_discussion_docs"
     )
-
     # 0단계: 댓글 크롤링부터 자동 실행
     pipeline.crawl_comments(stock_code="005930")  # 삼성전자
-
     # 1단계: CLOVA 세그멘테이션 수행
     pipeline.segment_documents()
-
     # 2단계: 임베딩 후 Chroma 저장
     pipeline.embed_and_store()
-
     # 3단계: 테스트 질의
     query = "삼성전자에 대한 최근 여론이 어때?"
     answer = pipeline.query_opinion(query)
-
     print("\n질문:", query)
     print("분석 결과:\n", answer)
 
