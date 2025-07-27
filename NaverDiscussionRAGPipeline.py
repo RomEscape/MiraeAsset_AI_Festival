@@ -55,6 +55,13 @@ POLITICAL_KEYWORDS = [
     '공황', '대폭락', '관세폭탄', '지뢰'
 ]
 
+COMPANY_STOCK_MAP = {
+    "삼성전자": "005930",
+    "SK하이닉스": "000660",
+    "카카오": "035720",
+    "현대차": "005380",
+}
+
 class NaverDiscussionRAGPipeline:
     def __init__(self, json_path: str, db_path: str, collection_name: str):
         load_dotenv(override=True)
@@ -257,24 +264,15 @@ class NaverDiscussionRAGPipeline:
                 print(f"Segmentation 실패: {e}")
                 time.sleep(3)
         
-        # 파일 저장
-        os.makedirs("./data", exist_ok=True)
-
-        # JSON 저장
-        with open("./data/discussion_segments.json", "w", encoding="utf-8") as f_json:
-            json.dump(self.chunked_docs, f_json, ensure_ascii=False, indent=2)
-            print("discussion_segments.json 저장 완료")
-
-        # TXT 저장
-        merged_text = "\n\n".join(item["page_content"] for item in self.chunked_docs)
-        with open("./data/merged_discussion_text.txt", "w", encoding="utf-8") as f_txt:
-            f_txt.write(merged_text.strip())
-            print("merged_discussion_text.txt 저장 완료")
+        # 파일 저장 제거 - discussion_comments.json만 유지
+        print("[세그멘테이션] 완료 - discussion_comments.json만 생성됨")
 
     def embed_and_store(self):
+        print("[임베딩] 시작")
         if not self.chunked_docs:
             raise ValueError("세그멘테이션이 먼저 실행되어야 합니다.")
 
+        print(f"[임베딩] chunked_docs 개수: {len(self.chunked_docs)}")
         self.documents = []
         for item in self.chunked_docs:
             self.documents.append(Document(
@@ -284,22 +282,33 @@ class NaverDiscussionRAGPipeline:
                     "id": str(uuid.uuid4())
                 }
             ))
+        print(f"[임베딩] documents 생성 완료: {len(self.documents)}개")
 
+        print("[임베딩] ChromaDB 클라이언트 초기화 시작")
         client = chromadb.PersistentClient(path=self.db_path)
+        print("[임베딩] ChromaDB 클라이언트 초기화 완료")
+        
         # 기존 컬렉션 삭제 후 새로 생성
+        print(f"[임베딩] 컬렉션 '{self.collection_name}' 처리 시작")
         try:
             client.delete_collection(name=self.collection_name)
+            print("[임베딩] 기존 컬렉션 삭제 완료")
         except Exception:
+            print("[임베딩] 기존 컬렉션 없음")
             pass  # 컬렉션이 없으면 무시
         client.create_collection(name=self.collection_name, metadata={"hnsw:space": "cosine"})
+        print("[임베딩] 새 컬렉션 생성 완료")
+        print("[임베딩] Chroma vectorstore 초기화 시작")
         self.vectorstore = Chroma(
             client=client,
             collection_name=self.collection_name,
             embedding_function=self.embedding_model
         )
+        print("[임베딩] Chroma vectorstore 초기화 완료")
 
+        print("[임베딩] 텍스트 처리 시작")
         texts, metadatas = [], []
-        for doc in self.documents:
+        for i, doc in enumerate(self.documents):
             original = doc.metadata
             source_ids = original.get("source", {}).get("source_ids", [])
 
@@ -316,8 +325,23 @@ class NaverDiscussionRAGPipeline:
 
             texts.append(text)
             metadatas.append(flattened_metadata)
+            
+            if i % 5 == 0:  # 5개마다 진행상황 출력
+                print(f"[임베딩] 텍스트 처리 진행: {i+1}/{len(self.documents)}")
 
-        self.vectorstore.add_texts(texts=texts, metadatas=metadatas)
+        print(f"[임베딩] 텍스트 처리 완료: {len(texts)}개")
+        print("[임베딩] ChromaDB에 텍스트 추가 시작")
+        
+        # 배치 단위로 나누어 처리 (임베딩 타임아웃 방지)
+        batch_size = 5
+        for i in range(0, len(texts), batch_size):
+            batch_texts = texts[i:i+batch_size]
+            batch_metadatas = metadatas[i:i+batch_size]
+            print(f"[임베딩] 배치 {i//batch_size + 1} 처리 중: {len(batch_texts)}개")
+            self.vectorstore.add_texts(texts=batch_texts, metadatas=batch_metadatas)
+            print(f"[임베딩] 배치 {i//batch_size + 1} 완료")
+        
+        print("[임베딩] ChromaDB에 텍스트 추가 완료")
         print(f"{len(texts)}개 문서가 ChromaDB에 저장되었습니다.")
 
     def query_opinion(self, question: str) -> str:
@@ -363,23 +387,26 @@ class NaverDiscussionRAGPipeline:
         return result['answer']
 
 def main():
+    company_name = input("분석할 회사명을 입력하세요: ").strip()
+    stock_code = COMPANY_STOCK_MAP.get(company_name)
+    if not stock_code:
+        print("해당 회사의 종목코드가 등록되어 있지 않습니다.")
+        return
+
+    json_path = f"./data/{company_name}_discussion_comments.json"
+    collection_name = f"{company_name}_discussion_docs"
     pipeline = NaverDiscussionRAGPipeline(
-        json_path="./data/discussion_comments.json",
+        json_path=json_path,
         db_path="./chroma_langchain_db",
-        collection_name="clovastudiodatas_discussion_docs"
+        collection_name=collection_name
     )
-    # 0단계: 댓글 크롤링부터 자동 실행
-    pipeline.crawl_comments(stock_code="005930")  # 삼성전자
-    # 1단계: CLOVA 세그멘테이션 수행
+    pipeline.crawl_comments(stock_code=stock_code, output_path=json_path)
     pipeline.segment_documents()
-    # 2단계: 임베딩 후 Chroma 저장
     pipeline.embed_and_store()
-    # 3단계: 테스트 질의
-    query = "삼성전자에 대한 최근 여론이 어때?"
+    query = f"{company_name}에 대한 최근 여론이 어때?"
     answer = pipeline.query_opinion(query)
     print("\n질문:", query)
     print("분석 결과:\n", answer)
 
-# 메인 실행
 if __name__ == "__main__":
     main()
