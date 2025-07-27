@@ -184,11 +184,11 @@ Action Input: 입력값
             if company_success_patterns:
                 # 해당 회사의 최고 성과 패턴
                 best_pattern = max(company_success_patterns, key=lambda x: x.get("quality_score", 0))
-                return f"🎯 {company_name} 최적 패턴: {' → '.join(best_pattern['tools_used'])} (품질점수: {best_pattern['quality_score']}/10)"
+                return f"{company_name} 최적 패턴: {' → '.join(best_pattern['tools_used'])} (품질점수: {best_pattern['quality_score']}/10)"
             
             # 전체 성공 패턴 중 최고 성과
             best_overall = max(success_patterns, key=lambda x: x.get("quality_score", 0))
-            return f"📊 전체 최적 패턴: {' → '.join(best_overall['tools_used'])} (품질점수: {best_overall['quality_score']}/10)"
+            return f"전체 최적 패턴: {' → '.join(best_overall['tools_used'])} (품질점수: {best_overall['quality_score']}/10)"
             
         except Exception as e:
             print(f"[메모리 추천 오류] {e}")
