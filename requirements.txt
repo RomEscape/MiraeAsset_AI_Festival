@@ -12,3 +12,5 @@ sentence-transformers==2.7.0
 tqdm==4.67.1
 webdriver-manager==4.0.2
 beautifulsoup4==4.12.3
+scikit-learn==1.5.2
+numpy==1.26.4
