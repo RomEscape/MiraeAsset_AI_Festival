@@ -70,12 +70,15 @@ class ResearchRAGPipeline:
         load_dotenv(override=True)
         self.embedding_model = ClovaXEmbeddings(model="bge-m3")
         self.client = chromadb.PersistentClient(path=db_path)
+        
+        self.collection_name = collection_name
+        
         # 기존 컬렉션 삭제 후 새로 생성
         try:
             self.client.delete_collection(name=self.collection_name)
         except Exception:
             pass  # 컬렉션이 없으면 무시
-        self.collection_name = collection_name
+        
         self.vectorstore = Chroma(
             client=self.client,
             collection_name=self.collection_name,
@@ -134,7 +137,7 @@ class ResearchRAGPipeline:
         metadata["importance_score"] = importance_score
         return metadata
 
-    def extract_from_pdf_folder(self, folder="./pdf_downloads"):
+    def extract_from_pdf_folder(self, folder="./pdf_downloads", target_company=None):
         path = Path(folder)
         if not path.exists() or not path.is_dir():
             raise ValueError("PDF 폴더 경로가 잘못되었습니다.")
@@ -161,6 +164,12 @@ class ResearchRAGPipeline:
         for file in path.glob("*.pdf"):
             if file.name in self.processed_files:
                 continue  # 이미 처리된 파일 스킵
+            
+            # 특정 회사 필터링
+            if target_company:
+                if target_company not in file.name:
+                    continue  # 해당 회사 PDF가 아니면 스킵
+            
             # PDF 본문에서 날짜 추출
             import fitz
             text = ""
@@ -181,10 +190,12 @@ class ResearchRAGPipeline:
                     date_source = "없음"
             pdf_files.append((file, date_str, text))
             date_check_list.append((file.name, date_str, date_source))
+        
         # 날짜(YYYYMMDD) 기준 내림차순(최신순) 정렬
         pdf_files.sort(key=lambda x: x[1], reverse=True)
+        
         # 날짜 파싱 결과 전체 출력
-        print("[PDF 파일별 날짜 파싱 결과]")
+        print(f"[PDF 파일별 날짜 파싱 결과] - {target_company or '전체'} 회사")
         for fname, dstr, src in date_check_list:
             print(f"- {fname} → {dstr} (근거: {src})")
 
@@ -211,18 +222,19 @@ class ResearchRAGPipeline:
 
         print(f"총 {len(self.documents)}개 PDF 문서가 로드되었습니다.")
 
+        # PDF가 없는 경우 JSON 파일 생성하지 않음
+        if len(self.documents) == 0:
+            print(f"[경고] {target_company} 관련 PDF 파일이 없습니다. JSON 파일을 생성하지 않습니다.")
+            return
+        
         # 저장 경로 보장
         os.makedirs("./data", exist_ok=True)
 
-        # JSON 저장
-        with open("./data/research_reports.json", "w", encoding="utf-8") as f_json:
+        # JSON 저장만 유지
+        company_suffix = f"_{target_company}" if target_company else ""
+        with open(f"./data/research_reports{company_suffix}.json", "w", encoding="utf-8") as f_json:
             json.dump(data_json, f_json, ensure_ascii=False, indent=2)
-            print("research_reports.json 저장 완료")
-
-        # TXT 저장
-        with open("./data/merged_research_text.txt", "w", encoding="utf-8") as f_txt:
-            f_txt.write(merged_text.strip())
-            print("merged_research_text.txt 저장 완료")
+            print(f"research_reports{company_suffix}.json 저장 완료")
 
     def segment_documents(self):
         if not self.documents:
