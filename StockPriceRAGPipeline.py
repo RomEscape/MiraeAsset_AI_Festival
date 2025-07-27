@@ -252,7 +252,7 @@ class StockPriceRAGPipeline:
         
         # 실시간 데이터 분석
         if '실시간' in data_by_type:
-            realtime = data_by_type['실시간']ㄴ
+            realtime = data_by_type['실시간']
             analysis_parts.append(f"""
 [실시간 주가 정보]
 • 현재가: {realtime.get('현재가', 'N/A'):,}원
