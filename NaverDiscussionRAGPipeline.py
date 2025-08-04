@@ -384,7 +384,18 @@ class NaverDiscussionRAGPipeline:
         ).assign(answer=rag_chain_from_docs)
 
         result = rag_chain_with_source.invoke(question)
-        return result['answer']
+        
+        # 원본 댓글 개수 정보 추가
+        try:
+            with open(self.json_path, "r", encoding="utf-8") as f:
+                original_comments = json.load(f)
+            original_count = len(original_comments)
+        except:
+            original_count = "알 수 없음"
+        
+        # 결과에 원본 댓글 개수 정보 포함
+        final_result = f"종목 토론방 댓글 {original_count}개를 수집하여 RAG 점수를 계산하였습니다.\n\nResult:\n{result['answer']}"
+        return final_result
 
 def main():
     company_name = input("분석할 회사명을 입력하세요: ").strip()
