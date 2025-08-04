@@ -1,10 +1,7 @@
 import random
 from dotenv import load_dotenv
 from langchain_community.chat_models import ChatClovaX
-from langchain.agents import Tool
 from langchain_core.prompts import ChatPromptTemplate
-import re
-import sys
 import os
 import shutil
 from FinalAnalysis import FinalAnalysis
@@ -186,18 +183,6 @@ Action Input: 입력값
         
         return found_company, stock_code
     
-    def generate_tool_questions(self, company_name: str, user_question: str):
-        """각 도구별로 적절한 질문 생성"""
-        questions = {
-            "NewsRAGTool": f"{company_name} 관련 최신 뉴스 분석",
-            "NaverDiscussionRAGPipeline": f"{company_name}에 대한 최근 투자자 여론과 시장 관심도는 어때?",
-            "ResearchRAGTool": f"최근 {company_name} 주가 분석",
-            "StockPriceRAGTool": f"{company_name}의 현재 주가 상황과 최근 2달간의 가격 변화 분석"
-        }
-        return questions
-    
-
-    
     def run_discussion_analysis(self, question: str, stock_code="005930", company_name="삼성전자"):
         """종목 토론방 분석"""
         # 회사명이 제공되지 않은 경우 기본값 사용
@@ -303,7 +288,7 @@ Action Input: 입력값
             similar_analyses = self.agent_memory.recall_similar_analysis(question, top_k=3)
             
             # 최적 도구 순서 추천
-            tool_suggestion = self.suggest_optimal_tools(question)
+            tool_suggestion = self.agent_memory.suggest_optimal_tools(company_name)
             
             # 최근 분석 패턴 및 성공률
             recent_patterns = self.agent_memory.get_analysis_patterns()
@@ -459,7 +444,7 @@ Action Input: 입력값
         if tool_suggestion:
             print(f"[메모리 추천] {tool_suggestion}")
         
-        # 도구별 질문 매핑
+        # 도구별 질문 매핑 (한 번만 정의)
         tool_questions = {
             "NewsRAGTool": f"{company_name} 관련 최신 뉴스 분석",
             "NaverDiscussionRAGPipeline": f"{company_name}에 대한 최근 투자자 여론과 시장 관심도는 어때?",
@@ -866,24 +851,14 @@ Action Input: 입력값
                 print("[정리] data 폴더가 이미 깨끗한 상태입니다")
         else:
             print("[정리] data 폴더가 존재하지 않습니다")
-    
-    def clean_data_dir(self):
-        """데이터 디렉토리 정리"""
+        
+        # chroma_langchain_db 폴더도 정리
         try:
-            # pdf_downloads 폴더 정리
-            if os.path.exists("pdf_downloads"):
-                shutil.rmtree("pdf_downloads")
-                os.makedirs("pdf_downloads")
-                print("[정리 완료] pdf_downloads 폴더를 초기화했습니다.")
-            
-            # chroma_langchain_db 폴더 정리 (선택사항)
             if os.path.exists("chroma_langchain_db"):
                 shutil.rmtree("chroma_langchain_db")
-                os.makedirs("chroma_langchain_db")
-                print("[정리 완료] chroma_langchain_db 폴더를 초기화했습니다.")
-                
+                print("[정리] chroma_langchain_db 폴더 삭제 완료")
         except Exception as e:
-            print(f"[정리 오류] {e}")
+            print(f"[정리 오류] chroma_langchain_db: {e}")
 
 # 전역 에이전트 인스턴스 생성
 agent = FinancialAnalysisAgent()
