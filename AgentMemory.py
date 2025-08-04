@@ -32,6 +32,22 @@ class AgentMemory:
         """분석 품질 평가 (0-10점)"""
         score = 0
         
+        # 뉴스 트리거만 실행된 경우 (안정적 상태 판단)
+        is_news_trigger_only = (
+            len(analysis.get("tools_used", [])) == 1 and 
+            "NewsRAGTool" in analysis.get("tools_used", []) and
+            "안정적 상태" in analysis.get("final_answer", "")
+        )
+        
+        if is_news_trigger_only:
+            # 뉴스 트리거 시스템의 정상적인 동작
+            score = 6  # 기본 점수
+            final_answer = analysis.get("final_answer", "").lower()
+            if "안정적" in final_answer and "추가 분석 없이" in final_answer:
+                score += 2  # 명확한 판단
+            return min(score, 10)
+        
+        # 일반적인 종합 분석의 경우
         # 도구 사용 다양성 (최대 3점)
         unique_tools = len(set(analysis.get("tools_used", [])))
         score += min(unique_tools, 3)
@@ -51,10 +67,10 @@ class AgentMemory:
             score += 1
         
         # 분석 완성도 (최대 2점)
-        if len(analysis.get("tools_used", [])) >= 2:
-            score += 2
-        elif len(analysis.get("tools_used", [])) >= 1:
-            score += 1
+        if len(analysis.get("tools_used", [])) >= 4:
+            score += 2  # 모든 도구 실행
+        elif len(analysis.get("tools_used", [])) >= 2:
+            score += 1  # 일부 도구 실행
         
         return min(score, 10)
     
@@ -156,13 +172,20 @@ class AgentMemory:
         # 최종 메모리 구성
         self.memory_data["analyses"] = keep_analyses + remaining_analyses
     
-    def save_analysis(self, question, tools_used, final_answer, company_name="", observations=None, execution_verified=False):
+    def save_analysis(self, question, tools_used, final_answer, company_name="", observations=None, execution_verified=False, agent_feedback=None):
         """분석 결과 저장 (실제 도구 실행 검증 포함)"""
         if observations is None:
             observations = []
         
-        # 실제 도구 실행 여부 검증
-        if not execution_verified:
+        # 뉴스 트리거 시스템의 정상적인 동작인지 확인
+        is_news_trigger_only = (
+            len(tools_used) == 1 and 
+            "NewsRAGTool" in tools_used and
+            "안정적 상태" in final_answer
+        )
+        
+        # 실제 도구 실행 여부 검증 (뉴스 트리거만 실행된 경우는 허용)
+        if not execution_verified and not is_news_trigger_only:
             print(f"[메모리 경고] '{company_name}' 분석이 실제 도구 실행 없이 저장되었습니다.")
             return False
         
@@ -173,7 +196,8 @@ class AgentMemory:
             "final_answer": final_answer,
             "company_name": company_name,
             "timestamp": datetime.now().isoformat(),
-            "quality_score": 0  # 나중에 계산
+            "quality_score": 0,  # 나중에 계산
+            "agent_feedback": agent_feedback  # Agent 피드백 추가
         }
         
         # 품질 점수 계산
@@ -276,6 +300,42 @@ class AgentMemory:
             result += f"   답변: {analysis['final_answer'][:100]}...\n\n"
         
         return result
+    
+    def suggest_optimal_tools(self, company_name: str = "") -> str:
+        """최적 도구 순서 추천 (피드백 기반)"""
+        if len(self.memory_data["analyses"]) < 2:
+            return ""
+        
+        # 해당 회사의 최근 분석들 찾기
+        company_analyses = []
+        for analysis in self.memory_data["analyses"]:
+            if company_name and analysis.get("company_name", "").lower() == company_name.lower():
+                company_analyses.append(analysis)
+            elif not company_name:  # 회사명이 없으면 모든 분석
+                company_analyses.append(analysis)
+        
+        if not company_analyses:
+            return ""
+        
+        # 품질 점수 기준으로 정렬
+        company_analyses.sort(key=lambda x: x.get("quality_score", 0), reverse=True)
+        
+        # 최고 품질 분석의 도구 순서 추천
+        best_analysis = company_analyses[0]
+        tools_used = best_analysis.get("tools_used", [])
+        
+        if len(tools_used) >= 2:
+            # NewsRAGTool은 항상 첫 번째로 유지
+            if "NewsRAGTool" in tools_used:
+                tools_used.remove("NewsRAGTool")
+                recommended_order = ["NewsRAGTool"] + tools_used
+            else:
+                recommended_order = tools_used
+            
+            quality_score = best_analysis.get("quality_score", 0)
+            return f"{' → '.join(recommended_order)} (품질점수: {quality_score}/10)"
+        
+        return ""
     
     def get_analysis_patterns(self):
         """분석 패턴 추출"""
