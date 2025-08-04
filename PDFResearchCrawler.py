@@ -9,12 +9,14 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 class PDFResearchCrawler:
-    # 핵심 회사 4개로 정리 (실제 검색 가능한 회사명들)
+    # 핵심 회사 6개로 정리 (실제 검색 가능한 회사명들)
     COMPANY_STOCK_MAP = {
         "삼성전자": "005930",
         "SK하이닉스": "000660", 
-        "카카오": "035720",
+        "LG에너지솔루션": "373220",
         "현대차": "005380",
+        "LG전자": "066570",
+        "KIA": "000270",
     }
     
     def __init__(self, download_folder="pdf_downloads", max_downloads=3):
@@ -62,7 +64,12 @@ class PDFResearchCrawler:
                 # 더 유연한 매칭 로직
                 if (title.lower() == target_stock.lower() or 
                     target_stock.lower() in title.lower() or
-                    title.lower() in target_stock.lower()):
+                    title.lower() in target_stock.lower() or
+                    # 특정 회사별 별칭 매칭
+                    (target_stock == "카카오" and "카카오" in title) or
+                    (target_stock == "SK하이닉스" and ("하이닉스" in title or "SK하이닉스" in title)) or
+                    (target_stock == "삼성전자" and ("삼성전자" in title or "삼성" in title)) or
+                    (target_stock == "현대차" and ("현대차" in title or "현대" in title))):
                     matched_items.append(item)
             
             print(f"'{target_stock}'와 일치하는 종목: {len(matched_items)}개")
@@ -158,45 +165,63 @@ class PDFResearchCrawler:
             print(f"다운로드 실패 {filename}: {e}")
             return False
     
-    def crawl_stock_reports(self, base_url, target_stock, max_pages=20):
+    def crawl_stock_reports(self, base_url, target_stock, max_pages=30):
         print(f"'{target_stock}' 종목의 리포트 크롤링 시작 (최대 {self.max_downloads}개)")
         all_pdf_links = []
         page = 1
-        # 다운로드 카운터 초기화
-        self.downloaded_count = 0
-        while page <= max_pages and self.downloaded_count < self.max_downloads:
+        consecutive_empty_pages = 0  # 연속으로 빈 페이지가 나온 횟수
+        
+        # 1단계: 모든 페이지에서 PDF 링크 수집
+        while page <= max_pages:
             page_url = self.build_page_url(base_url, page)
             print(f"페이지 {page} 크롤링: {page_url}")
             pdf_links = self.get_stock_filtered_pdf_links_from_page(page_url, target_stock)
+            
             if pdf_links:
                 print(f"페이지 {page}: {len(pdf_links)}개 PDF 파일 발견")
                 all_pdf_links.extend(pdf_links)
+                consecutive_empty_pages = 0  # 빈 페이지 카운터 리셋
             else:
                 print(f"페이지 {page}: '{target_stock}' 종목의 리포트를 찾을 수 없습니다.")
+                consecutive_empty_pages += 1
+                
+                # 연속 10페이지에서 아무것도 못 찾으면 중단 (더 많은 페이지를 검색하도록 개선)
+                if consecutive_empty_pages >= 10:
+                    print(f"연속 {consecutive_empty_pages}페이지에서 리포트를 찾지 못했습니다. 검색을 중단합니다.")
+                    break
+            
             page += 1
             time.sleep(1)
+        # 2단계: 중복 제거 및 정렬
         unique_links = []
         seen_urls = set()
         for link in all_pdf_links:
             if link['url'] not in seen_urls:
                 unique_links.append(link)
                 seen_urls.add(link['url'])
+        
         if not unique_links:
             print(f"'{target_stock}' 종목의 PDF 파일을 찾을 수 없습니다.")
             return 0
+        
         print(f"'{target_stock}' 종목의 {len(unique_links)}개 PDF 파일을 찾았습니다.")
         for i, pdf in enumerate(unique_links, 1):
             print(f"  {i}. {pdf['text']}")
+        
+        # 3단계: 다운로드 실행
         print(f"\n다운로드 시작...")
         success_count = 0
+        self.downloaded_count = 0  # 다운로드 카운터 초기화
+        
         for i, pdf_info in enumerate(unique_links, 1):
             if self.downloaded_count >= self.max_downloads:
                 print(f"최대 다운로드 개수({self.max_downloads})에 도달했습니다.")
                 break
-            print(f"\n[{i}/{len(unique_links)}] {pdf_info['text']}")
+            print(f"\n[{i}/{len(unique_links)}]")
             if self.download_pdf(pdf_info['url'], pdf_info['filename']):
                 success_count += 1
             time.sleep(1)
+        
         print(f"\n크롤링 완료: {success_count}/{len(unique_links)} 파일 다운로드 성공")
         print(f"총 다운로드 개수: {self.downloaded_count}/{self.max_downloads}")
         return success_count
